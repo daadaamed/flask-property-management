@@ -8,7 +8,7 @@ CREATE TABLE users (
   date_of_birth TEXT
 );
 
-CREATE TABLE property (
+CREATE TABLE properties (
   id SERIAL PRIMARY KEY,
   owner_id INTEGER NOT NULL REFERENCES users (id) ON DELETE CASCADE,
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
