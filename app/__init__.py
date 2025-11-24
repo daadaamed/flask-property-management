@@ -1,6 +1,9 @@
 import os
 
+from dotenv import load_dotenv
 from flask import Flask, jsonify
+
+load_dotenv()
 
 def create_app(test_config=None):
     # create and configure the app
@@ -25,6 +28,9 @@ def create_app(test_config=None):
 
     from . import db
     db.init_app(app)
+
+    from . import users 
+    app.register_blueprint(users.bp)
 
     @app.route('/', methods=['GET'])
     def index():

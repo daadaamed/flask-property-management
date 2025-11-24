@@ -12,6 +12,12 @@
 python -m venv venv
 source venv/bin/activate  # or venv\Scripts\activate sur Windows
 pip install -r
+flask init-db
 flask --app api run --debug
 ```
 
+
+DB configuration:
+```bash
+docker compose up -d db              
+```
