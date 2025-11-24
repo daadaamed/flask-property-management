@@ -1,0 +1,22 @@
+DROP TABLE IF EXISTS property CASCADE;
+DROP TABLE IF EXISTS user CASCADE;
+
+CREATE TABLE user (
+  id SERIAL PRIMARY KEY,
+  first_name TEXT,
+  last_name TEXT,
+  birthdate TEXT
+);
+
+CREATE TABLE property (
+  id SERIAL PRIMARY KEY,
+  owner_id INTEGER NOT NULL REFERENCES user (id) ON DELETE CASCADE,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  name TEXT NOT NULL,
+  description TEXT NOT NULL,
+  property_type TEXT NOT NULL,
+  city TEXT NOT NULL,
+  rooms_count INTEGER NOT NULL DEFAULT 0,
+  rooms_details TEXT
+);
