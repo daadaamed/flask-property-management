@@ -35,6 +35,9 @@ def create_app(test_config=None):
     from . import property
     app.register_blueprint(property.bp)
 
+    from .errors import bp as errors_bp
+    app.register_blueprint(errors_bp)
+
     @app.route('/', methods=['GET'])
     def index():
         return jsonify({"service": "property-management", "status": "ok"}), 200
