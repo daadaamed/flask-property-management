@@ -1,9 +1,10 @@
 import json
-from typing import Any, Dict, List, Tuple
+from typing import Dict, Any, Tuple
 
-from flask import Blueprint, jsonify, request, abort
+from flask import Blueprint, jsonify, request
+from sqlalchemy import func
 
-from app.db import get_db
+from .models import db, Property, User
 
 bp = Blueprint('property', __name__, url_prefix='/properties')
 
@@ -19,10 +20,11 @@ def get_current_user_id() -> int | None:
         return None
 
 
-def _serialize_property(row: Dict[str, Any]) -> Dict[str, Any]:
-    rooms_details = row.get('rooms_details')
-    parsed_rooms: List[Any]
-
+def _serialize_property(prop: Property) -> Dict[str, Any]:
+    """Serialize a Property object with parsed rooms_details."""
+    rooms_details = prop.rooms_details
+    parsed_rooms = []
+    
     if isinstance(rooms_details, str) and rooms_details:
         try:
             parsed_rooms = json.loads(rooms_details)
@@ -30,76 +32,23 @@ def _serialize_property(row: Dict[str, Any]) -> Dict[str, Any]:
             parsed_rooms = []
     elif isinstance(rooms_details, list):
         parsed_rooms = rooms_details
-    else:
-        parsed_rooms = []
-
+    
     return {
-        "id": row["id"],
-        "name": row["name"],
-        "description": row["description"],
-        "property_type": row["property_type"],
-        "city": row["city"],
-        "rooms_count": row["rooms_count"],
+        "id": prop.id,
+        "name": prop.name,
+        "description": prop.description,
+        "property_type": prop.property_type,
+        "city": prop.city,
+        "rooms_count": prop.rooms_count,
         "rooms_details": parsed_rooms,
-        "created_at": row["created_at"],
-        "updated_at": row["updated_at"],
+        "created_at": prop.created_at.isoformat() if prop.created_at else None,
+        "updated_at": prop.updated_at.isoformat() if prop.updated_at else None,
         "owner": {
-            "id": row["owner_id"],
-            "first_name": row["first_name"],
-            "last_name": row["last_name"],
+            "id": prop.owner.id,
+            "first_name": prop.owner.first_name,
+            "last_name": prop.owner.last_name,
         },
     }
-
-
-def _fetch_property(property_id: int) -> Dict[str, Any] | None:
-    db = get_db()
-    with db.cursor() as cur:
-        cur.execute(
-            """
-            SELECT p.*, u.first_name, u.last_name
-            FROM properties p
-            JOIN users u ON p.owner_id = u.id
-            WHERE p.id = %s;
-            """,
-            (property_id,),
-        )
-        row = cur.fetchone()
-    return row
-
-
-@bp.get('')
-def list_properties():
-    """List all properties, optionally filtered by city."""
-    city = (request.args.get('city') or '').strip()
-    db = get_db()
-
-    base_query = """
-        SELECT p.*, u.first_name, u.last_name
-        FROM properties p
-        JOIN users u ON p.owner_id = u.id
-    """
-    params: List[Any] = []
-
-    if city:
-        base_query += "WHERE LOWER(p.city) = LOWER(%s) "
-        params.append(city)
-
-    base_query += "ORDER BY p.created_at DESC"
-
-    with db.cursor() as cur:
-        cur.execute(base_query, tuple(params))
-        rows = cur.fetchall()
-
-    return jsonify({"properties": [_serialize_property(row) for row in rows]}), 200
-
-
-@bp.get('/<int:property_id>')
-def retrieve_property(property_id: int):
-    """Get a single property by id."""
-    property_row = _fetch_property(property_id)
-    if property_row is None:
-        return jsonify({"error": "property not found"}), 404
-    return jsonify({"property": _serialize_property(property_row)}), 200
 
 
 def _extract_property_payload(
@@ -120,6 +69,7 @@ def _extract_property_payload(
 
     rooms_details_provided = 'rooms_details' in payload
     rooms_details_value = payload.get('rooms_details')
+    
     if rooms_details_provided:
         if rooms_details_value in (None, ''):
             rooms_details_value = []
@@ -149,6 +99,37 @@ def _extract_property_payload(
     return fields, None
 
 
+@bp.get('')
+def list_properties():
+    """List all properties, optionally filtered by city.
+    
+    Query Parameters:
+        city (str, optional): Filter properties by city name (case-insensitive)
+    
+    Example:
+        GET /properties?city=Paris
+    """
+    city = request.args.get('city', '').strip()
+    
+    query = Property.query
+    
+    if city:
+        query = query.filter(func.lower(Property.city) == func.lower(city))
+    
+    properties = query.order_by(Property.created_at.desc()).all()
+    
+    return jsonify({"properties": [_serialize_property(p) for p in properties]}), 200
+
+
+@bp.get('/<int:property_id>')
+def retrieve_property(property_id: int):
+    """Get a single property by id."""
+    prop = Property.query.get(property_id)
+    if prop is None:
+        return jsonify({"error": "property not found"}), 404
+    return jsonify({"property": _serialize_property(prop)}), 200
+
+
 @bp.post('')
 def create_property():
     """Create a new property owned by the current user."""
@@ -161,39 +142,26 @@ def create_property():
     if error:
         return jsonify({"error": error}), 400
 
-    db = get_db()
+    # Ensure owner exists
+    owner = User.query.get(current_user_id)
+    if owner is None:
+        return jsonify({"error": "owner user not found"}), 400
 
-    # Optional: ensure owner exists
-    with db.cursor() as cur:
-        cur.execute("SELECT id FROM users WHERE id = %s;", (current_user_id,))
-        owner = cur.fetchone()
-        if owner is None:
-            return jsonify({"error": "owner user not found"}), 400
-
-        cur.execute(
-            """
-            INSERT INTO properties (
-                name, description, property_type, city,
-                rooms_count, rooms_details, owner_id
-            )
-            VALUES (%s, %s, %s, %s, %s, %s, %s)
-            RETURNING id;
-            """,
-            (
-                fields['name'],
-                fields['description'],
-                fields['property_type'],
-                fields['city'],
-                fields['rooms_count'],
-                fields['rooms_details'],
-                current_user_id,
-            ),
-        )
-        inserted = cur.fetchone()
-
-    db.commit()
-    created_at = _fetch_property(inserted['id'])
-    return jsonify({"property": _serialize_property(created_at)}), 201
+    # Create new property
+    new_property = Property(
+        owner_id=current_user_id,
+        name=fields['name'],
+        description=fields['description'],
+        property_type=fields['property_type'],
+        city=fields['city'],
+        rooms_count=fields['rooms_count'],
+        rooms_details=fields['rooms_details']
+    )
+    
+    db.session.add(new_property)
+    db.session.commit()
+    
+    return jsonify({"property": _serialize_property(new_property)}), 201
 
 
 @bp.route('/<int:property_id>', methods=('PUT', 'PATCH'))
@@ -203,11 +171,11 @@ def update_property(property_id: int):
     if current_user_id is None:
         return jsonify({"error": "X-User-Id header is required"}), 401
 
-    property_row = _fetch_property(property_id)
-    if property_row is None:
+    prop = Property.query.get(property_id)
+    if prop is None:
         return jsonify({"error": "property not found"}), 404
 
-    if property_row['owner_id'] != current_user_id:
+    if prop.owner_id != current_user_id:
         return jsonify({"error": "you can only edit your own properties"}), 403
 
     payload = request.get_json(silent=True) or {}
@@ -217,17 +185,13 @@ def update_property(property_id: int):
     if not fields:
         return jsonify({"error": "nothing to update"}), 400
 
-    assignments = ', '.join(f"{column} = %s" for column in fields.keys())
-    assignments += ', updated_at = CURRENT_TIMESTAMP'
-    values = tuple(list(fields.values()) + [property_id])
-
-    db = get_db()
-    with db.cursor() as cur:
-        cur.execute(f'UPDATE properties SET {assignments} WHERE id = %s;', values)
-    db.commit()
-
-    updated_at = _fetch_property(property_id)
-    return jsonify({"property": _serialize_property(updated_at)}), 200
+    # Update fields
+    for key, value in fields.items():
+        setattr(prop, key, value)
+    
+    db.session.commit()
+    
+    return jsonify({"property": _serialize_property(prop)}), 200
 
 
 @bp.delete('/<int:property_id>')
@@ -237,40 +201,14 @@ def delete_property(property_id: int):
     if current_user_id is None:
         return jsonify({"error": "X-User-Id header is required"}), 401
 
-    property_row = _fetch_property(property_id)
-    if property_row is None:
+    prop = Property.query.get(property_id)
+    if prop is None:
         return jsonify({"error": "property not found"}), 404
 
-    if property_row['owner_id'] != current_user_id:
+    if prop.owner_id != current_user_id:
         return jsonify({"error": "you can only delete your own properties"}), 403
 
-    db = get_db()
-    with db.cursor() as cur:
-        cur.execute('DELETE FROM properties WHERE id = %s;', (property_id,))
-    db.commit()
+    db.session.delete(prop)
+    db.session.commit()
+    
     return jsonify({"message": "property deleted"}), 200
-
-
-@bp.get('/city/<string:city_name>')
-def get_properties_by_city(city_name: str):
-    """List properties located in the provided city name (case-insensitive)."""
-    city = city_name.strip()
-    if not city:
-        return jsonify({"error": "city name is required"}), 400
-
-    db = get_db()
-    with db.cursor() as cur:
-        cur.execute(
-            """
-            SELECT p.*, u.first_name, u.last_name
-            FROM properties p
-            JOIN users u ON p.owner_id = u.id
-            WHERE LOWER(p.city) = LOWER(%s)
-            ORDER BY p.created_at DESC;
-            """,
-            (city,),
-        )
-        rows = cur.fetchall()
-
-    serialized = [_serialize_property(row) for row in rows]
-    return jsonify({"properties": serialized, "city": city_name}), 200

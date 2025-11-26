@@ -1,10 +1,21 @@
 from datetime import date
 
-from flask import Blueprint, request, jsonify, abort
+from flask import Blueprint, request, jsonify
 
-from .db import get_db
+from .models import db, User
 
 bp = Blueprint('users', __name__, url_prefix='/users')
+
+
+def get_current_user_id() -> int | None:
+    """Read the current user id from the X-User-Id header (dev-only auth)."""
+    raw = request.headers.get('X-User-Id')
+    if raw is None:
+        return None
+    try:
+        return int(raw)
+    except ValueError:
+        return None
 
 
 @bp.post('')
@@ -19,39 +30,25 @@ def create_user():
     if not first_name or not last_name or not dob_str:
         return jsonify({'error': 'first_name, last_name and date_of_birth are required'}), 400
 
-    dob = None
+    # Validate date format
     if dob_str:
         try:
             year, month, day = map(int, dob_str.split('-'))
-            dob = date(year, month, day)
+            date(year, month, day)  # Validate the date
         except ValueError:
             return jsonify({'error': 'date_of_birth must be YYYY-MM-DD'}), 400
 
-    db = get_db()
-    with db.cursor() as cur:
-        cur.execute(
-            """
-            INSERT INTO users (first_name, last_name, date_of_birth)
-            VALUES (%s, %s, %s)
-            RETURNING id;
-            """,
-            (first_name, last_name, dob),
-        )
-        user_id = cur.fetchone()['id']
-    db.commit()
+    new_user = User(
+        first_name=first_name,
+        last_name=last_name,
+        date_of_birth=dob_str
+    )
+    
+    db.session.add(new_user)
+    db.session.commit()
 
-    return jsonify({'id': user_id}), 201
+    return jsonify({'id': new_user.id}), 201
 
-# read from header a simlation of authentication
-def get_current_user_id() -> int | None:
-    """Read the current user id from the X-User-Id header (dev-only auth)."""
-    raw = request.headers.get('X-User-Id')
-    if raw is None:
-        return None
-    try:
-        return int(raw)
-    except ValueError:
-        return None
 
 @bp.patch('/<int:user_id>')
 def update_user(user_id: int):
@@ -66,6 +63,10 @@ def update_user(user_id: int):
     if current_user_id != user_id:
         return jsonify({'error': 'forbidden: you can only update your own user'}), 403
 
+    user = User.query.get(user_id)
+    if user is None:
+        return jsonify({'error': 'user not found'}), 404
+
     data = request.get_json() or {}
 
     # Only allow updating these fields
@@ -73,101 +74,41 @@ def update_user(user_id: int):
     if not any(field in data for field in allowed_fields):
         return jsonify({'error': 'no supported fields to update'}), 400
 
-    db = get_db()
-    with db.cursor() as cur:
-        # Fetch current values
-        cur.execute(
-            """
-            SELECT id, first_name, last_name, date_of_birth
-            FROM users
-            WHERE id = %s;
-            """,
-            (user_id,),
-        )
-        row = cur.fetchone()
+    # Update fields if provided
+    if 'first_name' in data:
+        user.first_name = data['first_name']
+    
+    if 'last_name' in data:
+        user.last_name = data['last_name']
+    
+    if 'date_of_birth' in data:
+        dob_str = data['date_of_birth']
+        if dob_str is None:
+            user.date_of_birth = None
+        else:
+            try:
+                year, month, day = map(int, dob_str.split('-'))
+                date(year, month, day)  # Validate the date
+                user.date_of_birth = dob_str
+            except ValueError:
+                return jsonify({'error': 'date_of_birth must be YYYY-MM-DD'}), 400
 
-        if row is None:
-            abort(404)
-
-        first_name = data.get('first_name', row['first_name'])
-        last_name = data.get('last_name', row['last_name'])
-
-        dob = row['date_of_birth']
-        if 'date_of_birth' in data:
-            dob_str = data['date_of_birth']
-            if dob_str is None:
-                dob = None
-            else:
-                try:
-                    year, month, day = map(int, dob_str.split('-'))
-                    dob = date(year, month, day)
-                except ValueError:
-                    return jsonify({'error': 'date_of_birth must be YYYY-MM-DD'}), 400
-
-        # Apply update
-        cur.execute(
-            """
-            UPDATE users
-            SET first_name = %s,
-                last_name = %s,
-                date_of_birth = %s
-            WHERE id = %s;
-            """,
-            (first_name, last_name, dob, user_id),
-        )
-
-    db.commit()
+    db.session.commit()
     return jsonify({'message': 'user updated'})
+
 
 @bp.get('')
 def list_users():
     """Get a list of all users."""
-    db = get_db()
-    with db.cursor() as cur:
-        cur.execute(
-            """
-            SELECT id, first_name, last_name, date_of_birth
-            FROM users
-            ORDER BY id;
-            """
-        )
-        rows = cur.fetchall()
+    users = User.query.order_by(User.id).all()
+    return jsonify([user.to_dict() for user in users])
 
-    users = [
-        {
-            'id': row['id'],
-            'first_name': row['first_name'],
-            'last_name': row['last_name'],
-            'date_of_birth': row['date_of_birth'],
-        }
-        for row in rows
-    ]
-
-    return jsonify(users)
 
 @bp.get('/<int:user_id>')
 def get_user(user_id: int):
     """Get a single user by id."""
-    db = get_db()
-    with db.cursor() as cur:
-        cur.execute(
-            """
-            SELECT id, first_name, last_name, date_of_birth
-            FROM users
-            WHERE id = %s;
-            """,
-            (user_id,),
-        )
-        row = cur.fetchone()
-
-    if row is None:
-        abort(404)
-
-    return jsonify(
-        {
-            'id': row['id'],
-            'first_name': row['first_name'],
-            'last_name': row['last_name'],
-            'date_of_birth': row['date_of_birth'],
-        }
-    )
+    user = User.query.get(user_id)
+    if user is None:
+        return jsonify({'error': 'user not found'}), 404
+    
+    return jsonify(user.to_dict())
