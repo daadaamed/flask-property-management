@@ -3,10 +3,11 @@ DROP TABLE IF EXISTS users CASCADE;
 
 CREATE TABLE users (
   id SERIAL PRIMARY KEY,
-  first_name TEXT,
-  last_name TEXT,
-  date_of_birth TEXT
+  first_name TEXT NOT NULL,
+  last_name  TEXT NOT NULL,
+  date_of_birth DATE NOT NULL
 );
+
 
 CREATE TABLE properties (
   id SERIAL PRIMARY KEY,
