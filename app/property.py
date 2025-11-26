@@ -249,3 +249,28 @@ def delete_property(property_id: int):
         cur.execute('DELETE FROM properties WHERE id = %s;', (property_id,))
     db.commit()
     return jsonify({"message": "property deleted"}), 200
+
+
+@bp.get('/city/<string:city_name>')
+def get_properties_by_city(city_name: str):
+    """List properties located in the provided city name (case-insensitive)."""
+    city = city_name.strip()
+    if not city:
+        return jsonify({"error": "city name is required"}), 400
+
+    db = get_db()
+    with db.cursor() as cur:
+        cur.execute(
+            """
+            SELECT p.*, u.first_name, u.last_name
+            FROM properties p
+            JOIN users u ON p.owner_id = u.id
+            WHERE LOWER(p.city) = LOWER(%s)
+            ORDER BY p.created_at DESC;
+            """,
+            (city,),
+        )
+        rows = cur.fetchall()
+
+    serialized = [_serialize_property(row) for row in rows]
+    return jsonify({"properties": serialized, "city": city_name}), 200
