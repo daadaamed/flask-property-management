@@ -1,7 +1,7 @@
 import json
 from typing import Any, Dict, List, Tuple
 
-from flask import Blueprint, jsonify, request, abort
+from flask import Blueprint, jsonify, request
 
 from app.db import get_db
 
@@ -69,9 +69,25 @@ def _fetch_property(property_id: int) -> Dict[str, Any] | None:
 
 @bp.get('')
 def list_properties():
-    """List all properties, optionally filtered by city."""
-    city = (request.args.get('city') or '').strip()
+    """List all properties, optionally filtered by city, with simple pagination."""
     db = get_db()
+
+    # pagination
+    try:
+        page = int(request.args.get("page", 1))
+    except (TypeError, ValueError):
+        page = 1
+
+    try:
+        page_size = int(request.args.get("page_size", 20))
+    except (TypeError, ValueError):
+        page_size = 20
+
+    page = max(page, 1)
+    page_size = max(min(page_size, 100), 1)
+    offset = (page - 1) * page_size
+
+    city = (request.args.get('city') or '').strip()
 
     base_query = """
         SELECT p.*, u.first_name, u.last_name
@@ -81,16 +97,21 @@ def list_properties():
     params: List[Any] = []
 
     if city:
-        base_query += "WHERE LOWER(p.city) = LOWER(%s) "
+        base_query += " WHERE LOWER(p.city) = LOWER(%s)"
         params.append(city)
 
-    base_query += "ORDER BY p.created_at DESC"
+    base_query += " ORDER BY p.created_at DESC LIMIT %s OFFSET %s"
+    params.extend([page_size, offset])
 
     with db.cursor() as cur:
         cur.execute(base_query, tuple(params))
         rows = cur.fetchall()
 
-    return jsonify({"properties": [_serialize_property(row) for row in rows]}), 200
+    return jsonify({
+        "properties": [_serialize_property(row) for row in rows],
+        "page": page,
+        "page_size": page_size,
+    }), 200
 
 
 @bp.get('/<int:property_id>')
