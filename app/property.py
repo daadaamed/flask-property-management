@@ -72,6 +72,11 @@ def list_properties():
     """List all properties, optionally filtered by city, with simple pagination."""
     db = get_db()
 
+    # City is required in filter
+    city = (request.args.get('city') or '').strip()
+    if not city:
+        return jsonify({"error": "city query parameter is required"}), 400
+
     # pagination
     try:
         page = int(request.args.get("page", 1))
