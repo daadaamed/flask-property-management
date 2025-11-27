@@ -13,6 +13,7 @@ python -m venv venv
 source venv/bin/activate  # or venv\Scripts\activate sur Windows
 pip install -r requirements.txt
 flask init-db
+flask populate-db
 flask --app app run --debug
 ```
 
@@ -72,7 +73,7 @@ curl -X PATCH http://127.0.0.1:5000/properties/1 \
       }'
 ```
 
-#### Get properties
+#### Get properties -> returns an error since city argument is required
 ```bash
 curl http://127.0.0.1:5000/properties
 ```
